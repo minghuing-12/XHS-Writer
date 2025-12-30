@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>6格小红书改写系统</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; }
+    body { margin: 0; background: #0b0c10; color: #eaeaea; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    .card { background: #11131a; border: 1px solid #24283a; border-radius: 16px; padding: 16px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+    h1 { font-size: 18px; margin: 0 0 6px; }
+    .sub { opacity: .75; font-size: 13px; margin-bottom: 14px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .row { display: grid; gap: 8px; padding: 12px; border: 1px solid #24283a; border-radius: 14px; background: #0f1118; }
+    .rowhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .tag { font-size: 12px; opacity: .8; }
+    textarea {
+      width: 100%; min-height: 86px; resize: vertical;
+      background: #0b0c10; color: #eaeaea;
+      border: 1px solid #2a2f46; border-radius: 12px;
+      padding: 10px; line-height: 1.45;
+      outline: none;
+    }
+    textarea:focus { border-color: #5b6cff; box-shadow: 0 0 0 3px rgba(91,108,255,.15); }
+    .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 14px 0 10px; }
+    button {
+      cursor: pointer; border: 1px solid #2a2f46;
+      background: #14182a; color: #eaeaea; border-radius: 12px;
+      padding: 10px 12px; font-weight: 600;
+    }
+    button.primary { background: #5b6cff; border-color: #5b6cff; color: #0b0c10; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    select, input {
+      background: #0b0c10; color: #eaeaea;
+      border: 1px solid #2a2f46; border-radius: 12px;
+      padding: 10px 12px;
+      outline: none;
+    }
+    .final { margin-top: 14px; display: grid; gap: 10px; }
+    .status { font-size: 13px; opacity: .85; min-height: 18px; }
+    .hint { font-size: 12px; opacity: .65; margin-top: 10px; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>6格网页小系统：AI 小红书写手（干货利落）改写 + 乘法拼接</h1>
+      <div class="sub">左边放原句，右边自动生成同义改写。最后用 “×” 串成一段，直接复制就能发。</div>
+
+      <div class="controls">
+        <label class="tag">风格：</label>
+        <select id="style">
+          <option value="xiaohongshu" selected>小红书写手（干货利落）</option>
+          <option value="whatsapp">WhatsApp（更口语、短句）</option>
+          <option value="formal">正式（更商务）</option>
+        </select>
+
+        <label class="tag">连接符：</label>
+        <input id="joiner" value=" × " style="width:100px" />
+
+        <button class="primary" id="btnRewrite">一键改写 6 句</button>
+        <button id="btnJoin">拼接成一段</button>
+        <button id="btnCopy">复制最终段落</button>
+      </div>
+
+      <div class="status" id="status"></div>
+
+      <div class="grid" id="grid"></div>
+
+      <div class="final">
+        <div class="tag">最终段落（可编辑）：</div>
+        <textarea id="finalText" placeholder="这里会出现拼接后的段落…"></textarea>
+      </div>
+
+      <div class="hint">小技巧：你也可以只填其中几格，系统会自动跳过空白格。</div>
+    </div>
+  </div>
+
+<script>
+  const grid = document.getElementById('grid');
+  const statusEl = document.getElementById('status');
+  const finalText = document.getElementById('finalText');
+
+  // 生成6行
+  Array.from({length: 6}).forEach((_, i) => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `
+      <div class="rowhead">
+        <div class="tag">第 ${i+1} 格</div>
+        <button data-one="${i}" title="只改写这一格">改写这一格</button>
+      </div>
+      <textarea data-in="${i}" placeholder="输入原句（第 ${i+1} 句）…"></textarea>
+      <textarea data-out="${i}" placeholder="同义改写会出现在这里（第 ${i+1} 句）…"></textarea>
+    `;
+    grid.appendChild(row);
+  });
+
+  function setStatus(msg) { statusEl.textContent = msg || ''; }
+  function getInputs() {
+    return Array.from(document.querySelectorAll('textarea[data-in]')).map(t => t.value.trim());
+  }
+  function getOutputs() {
+    return Array.from(document.querySelectorAll('textarea[data-out]')).map(t => t.value.trim());
+  }
+  function setOutputs(arr) {
+    const outs = Array.from(document.querySelectorAll('textarea[data-out]'));
+    outs.forEach((t, i) => t.value = arr[i] ?? '');
+  }
+
+  async function callRewrite(sentences, style) {
+    const res = await fetch('/api/rewrite', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ sentences, style })
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(()=> '');
+      throw new Error(`API error (${res.status}): ${text || 'unknown'}`);
+    }
+    return res.json();
+  }
+
+  async function rewriteAll() {
+    const style = document.getElementById('style').value;
+    const sentences = getInputs();
+    if (sentences.every(s => !s)) return setStatus('你先填至少一句，我才有东西改写 😄');
+
+    setStatus('AI 正在改写中…');
+    const btn = document.getElementById('btnRewrite');
+    btn.disabled = true;
+
+    try {
+      const data = await callRewrite(sentences, style);
+      setOutputs(data.rewrites || []);
+      setStatus('改写完成 ✅ 你可以再点「拼接成一段」');
+    } catch (e) {
+      setStatus('出错了：' + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function rewriteOne(idx) {
+    const style = document.getElementById('style').value;
+    const sentences = getInputs();
+    if (!sentences[idx]) return setStatus(`第 ${idx+1} 格是空的，先填一句再改写～`);
+
+    setStatus(`AI 正在改写第 ${idx+1} 格…`);
+    try {
+      const data = await callRewrite(sentences.map((s,i)=> i===idx ? s : ""), style);
+      const outs = getOutputs();
+      outs[idx] = (data.rewrites || [])[idx] || '';
+      setOutputs(outs);
+      setStatus(`第 ${idx+1} 格改写完成 ✅`);
+    } catch (e) {
+      setStatus('出错了：' + e.message);
+    }
+  }
+
+  function joinFinal() {
+    const joiner = document.getElementById('joiner').value ?? ' × ';
+    const outs = getOutputs().filter(Boolean);
+    if (!outs.length) return setStatus('右边还没有改写内容～先改写再拼接');
+    finalText.value = outs.join(joiner);
+    setStatus('已拼接成一段 ✅');
+  }
+
+  async function copyFinal() {
+    const text = finalText.value.trim();
+    if (!text) return setStatus('最终段落是空的～先拼接一下');
+    await navigator.clipboard.writeText(text);
+    setStatus('已复制到剪贴板 ✅');
+  }
+
+  document.getElementById('btnRewrite').addEventListener('click', rewriteAll);
+  document.getElementById('btnJoin').addEventListener('click', joinFinal);
+  document.getElementById('btnCopy').addEventListener('click', copyFinal);
+
+  // 每行的“改写这一格”
+  document.querySelectorAll('button[data-one]').forEach(btn => {
+    btn.addEventListener('click', () => rewriteOne(Number(btn.dataset.one)));
+  });
+</script>
+</body>
+</html>
